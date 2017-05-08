@@ -18,6 +18,8 @@
 package org.fcrepo.kernel.modeshape.rdf;
 
 import static org.apache.jena.rdf.model.ModelFactory.createDefaultModel;
+import static org.apache.jena.rdf.model.ResourceFactory.createResource;
+import static java.util.UUID.randomUUID;
 import static javax.jcr.PropertyType.REFERENCE;
 import static javax.jcr.PropertyType.STRING;
 import static javax.jcr.PropertyType.UNDEFINED;
@@ -65,6 +67,7 @@ import org.fcrepo.kernel.api.identifiers.IdentifierConverter;
 import org.fcrepo.kernel.api.services.functions.HierarchicalIdentifierSupplier;
 import org.fcrepo.kernel.api.services.functions.UniqueValueSupplier;
 import org.fcrepo.kernel.modeshape.rdf.converters.ValueConverter;
+import org.fcrepo.kernel.modeshape.utils.BNodeSkolemizationUtil;
 import org.fcrepo.kernel.modeshape.utils.NodePropertiesTools;
 
 import org.modeshape.jcr.api.JcrTools;
@@ -113,7 +116,6 @@ public class JcrRdfTools {
     private static final Model m = createDefaultModel();
 
     private static final UniqueValueSupplier pidMinter =  new DefaultPathMinter();
-
     /**
      * Constructor with even more context.
      *
@@ -353,16 +355,17 @@ public class JcrRdfTools {
      *
      * @param idTranslator the property of idTranslator
      * @param t the statement
+     * @param topic the topic
      * @return the persistable statement
      * @throws RepositoryException if repository exception occurred
      */
-    public Statement skolemize(final IdentifierConverter<Resource, FedoraResource> idTranslator, final Statement t)
-            throws RepositoryException {
+    public Statement skolemize(final IdentifierConverter<Resource, FedoraResource> idTranslator, final Statement t,
+            final String topic) throws RepositoryException {
 
         Statement skolemized = t;
 
         if (t.getSubject().isAnon()) {
-            skolemized = m.createStatement(getSkolemizedResource(idTranslator, skolemized.getSubject()),
+            skolemized = m.createStatement(getSkolemizedResource(idTranslator, skolemized.getSubject(), topic),
                     skolemized.getPredicate(),
                     skolemized.getObject());
         } else if (idTranslator.inDomain(t.getSubject()) && t.getSubject().getURI().contains("#")) {
@@ -371,7 +374,7 @@ public class JcrRdfTools {
 
         if (t.getObject().isAnon()) {
             skolemized = m.createStatement(skolemized.getSubject(), skolemized.getPredicate(), getSkolemizedResource
-                    (idTranslator, skolemized.getObject()));
+                    (idTranslator, skolemized.getObject(), topic));
         } else if (t.getObject().isResource()
                 && idTranslator.inDomain(t.getObject().asResource())
                 && t.getObject().asResource().getURI().contains("#")) {
@@ -410,24 +413,32 @@ public class JcrRdfTools {
     }
 
     private Resource getSkolemizedResource(final IdentifierConverter<Resource, FedoraResource> idTranslator,
-                                           final RDFNode resource) throws RepositoryException {
+            final RDFNode resource, final String topic) throws RepositoryException {
         final AnonId id = resource.asResource().getId();
 
         if (!skolemizedBnodeMap.containsKey(id)) {
-            jcrTools.findOrCreateNode(session, skolemizedPrefix());
-            final String pid = pidMinter.get();
-            final String path = skolemizedPrefix() + pid;
-            final Node preexistingNode = getClosestExistingAncestor(session, path);
-            final Node orCreateNode = jcrTools.findOrCreateNode(session, path);
-            orCreateNode.addMixin(FEDORA_SKOLEM);
+            if (BNodeSkolemizationUtil.isSkolemizeToHashURIs()) {
+                final String base = idTranslator.asString(createResource(topic));
+                final Resource skolemizedSubject = idTranslator.toDomain(base + "#" + blankNodeIdentifier());
+                findOrCreateHashUri(idTranslator, skolemizedSubject);
+                skolemizedBnodeMap.put(id, skolemizedSubject);
 
-            if (preexistingNode != null) {
-                AbstractService.tagHierarchyWithPairtreeMixin(preexistingNode,
-                        orCreateNode);
+            } else {
+                jcrTools.findOrCreateNode(session, skolemizedPrefix());
+                final String pid = pidMinter.get();
+                final String path = skolemizedPrefix() + pid;
+                final Node preexistingNode = getClosestExistingAncestor(session, path);
+                final Node orCreateNode = jcrTools.findOrCreateNode(session, path);
+                orCreateNode.addMixin(FEDORA_SKOLEM);
+
+                if (preexistingNode != null) {
+                    AbstractService.tagHierarchyWithPairtreeMixin(preexistingNode,
+                            orCreateNode);
+                }
+
+                final Resource skolemizedSubject = nodeToResource(idTranslator).convert(orCreateNode);
+                skolemizedBnodeMap.put(id, skolemizedSubject);
             }
-
-            final Resource skolemizedSubject = nodeToResource(idTranslator).convert(orCreateNode);
-            skolemizedBnodeMap.put(id, skolemizedSubject);
         }
 
         return skolemizedBnodeMap.get(id);
@@ -437,6 +448,9 @@ public class JcrRdfTools {
         return "/.well-known/genid/";
     }
 
-    private static class DefaultPathMinter implements HierarchicalIdentifierSupplier { }
+    private String blankNodeIdentifier() {
+        return "genid" + randomUUID().toString();
+    }
 
+    private static class DefaultPathMinter implements HierarchicalIdentifierSupplier { }
 }

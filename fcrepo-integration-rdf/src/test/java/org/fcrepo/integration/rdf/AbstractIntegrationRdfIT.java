@@ -35,10 +35,12 @@ import org.apache.http.entity.BasicHttpEntity;
 import org.apache.jena.riot.RDFDataMgr;
 import org.apache.jena.riot.RDFLanguages;
 import org.fcrepo.integration.http.api.AbstractResourceIT;
+import org.fcrepo.kernel.modeshape.utils.BNodeSkolemizationUtil;
 
 import javax.ws.rs.core.Response;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.net.URI;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -125,7 +127,7 @@ public abstract class AbstractIntegrationRdfIT extends AbstractResourceIT {
 
             Triple replacement = next;
 
-            if (replacement.getSubject().toString().contains(".well-known")) {
+            if (isSkolemizedBnode(replacement.getSubject())) {
                 if (!bnodeMap.containsKey(replacement.getSubject())) {
                     bnodeMap.put(replacement.getSubject(), createBlankNode());
                 }
@@ -135,7 +137,7 @@ public abstract class AbstractIntegrationRdfIT extends AbstractResourceIT {
                         replacement.getObject());
             }
 
-            if (replacement.getObject().toString().contains(".well-known")) {
+            if (isSkolemizedBnode(replacement.getObject())) {
 
                 if (!bnodeMap.containsKey(replacement.getObject())) {
                     bnodeMap.put(replacement.getObject(), createBlankNode());
@@ -157,6 +159,19 @@ public abstract class AbstractIntegrationRdfIT extends AbstractResourceIT {
             betterGraph.add(replacement);
         }
         return betterGraph;
+    }
+
+    private static boolean isSkolemizedBnode(final Node node) {
+        if (!node.isURI()) {
+            return false;
+        }
+
+        if (BNodeSkolemizationUtil.isSkolemizeToHashURIs()) {
+            final URI uri = URI.create(node.toString());
+            return uri.getFragment() != null && uri.getFragment().startsWith("genid");
+        } else {
+            return node.toString().contains(".well-known");
+        }
     }
 
     protected void checkResponse(final HttpResponse response, final Response.StatusType expected) {
